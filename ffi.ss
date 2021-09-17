@@ -18,7 +18,8 @@
     chez-leveldb-ffi:write-options-create
     chez-leveldb-ffi:write-options-destroy
     chez-leveldb-ffi:write-options-set-sync
-    chez-leveldb-ffi:put)
+    chez-leveldb-ffi:put
+    chez-leveldb-ffi:get)
 
   (import
     (chezscheme)
@@ -40,13 +41,14 @@
 
   (define (void*->bytevector ptr len)
     (define-ftype byte-array (array 0 unsigned-8))
-    (let ([arr (make-ftype-pointer byte-array ptr)]
-           [bv  (make-bytevector len)])
-      (let loop ((i 0))
-        (when (< i len)
-          (bytevector-u8-set! bv i (ftype-ref byte-array (i) arr))
-          (loop (fx+ 1 i))))
-      bv))
+    (if (> len 0)
+      (let ([arr (make-ftype-pointer byte-array ptr)]
+             [bv  (make-bytevector len)])
+        (let loop ((i 0))
+          (when (< i len)
+            (bytevector-u8-set! bv i (ftype-ref byte-array (i) arr))
+            (loop (fx+ 1 i))))
+        bv)))
 
   (define (void*->string ptr)
     (if (not (= ptr 0))
@@ -70,6 +72,13 @@
           (foreign-free pptr)
           (values #f msg)))))
 
+  (define (fetch-value value vlen-ptr)
+    (let* ([len (foreign-ref 'size_t vlen-ptr 0)]
+            [value-vec (void*->bytevector value len)])
+      (chez-leveldb-ffi:free value)
+      (foreign-free vlen-ptr)
+      value-vec))
+
   (define leveldb-open
     (foreign-procedure "leveldb_open" (chez-leveldb-ffi:options* string void*) chez-leveldb-ffi:db*))
   (define leveldb-close
@@ -77,6 +86,9 @@
   (define leveldb-put
     (foreign-procedure "leveldb_put" (chez-leveldb-ffi:db* chez-leveldb-ffi:write-options*
                                        u8* size_t u8* size_t void*) void))
+  (define leveldb-get
+    (foreign-procedure "leveldb_get" (chez-leveldb-ffi:db* chez-leveldb-ffi:read-options*
+                                       u8* size_t void* void*) void*))
 
   (define chez-leveldb-ffi:major-version
     (foreign-procedure __collect_safe "leveldb_major_version" () int))
@@ -132,4 +144,12 @@
       (leveldb-put db options key klen value vlen pptr)
       (let-values ([(result msg) (action-result pptr)])
         (if result result))))
+
+  (define (chez-leveldb-ffi:get db options key)
+    (let* ([pptr (alloc-pptr)]
+            [klen (bytevector-length key)]
+            [vlen-ptr (foreign-alloc (foreign-sizeof 'size_t))]
+            [value (leveldb-get db options key klen vlen-ptr pptr)])
+      (let-values ([(result msg) (action-result pptr)])
+        (if result (fetch-value value vlen-ptr)))))
 )
